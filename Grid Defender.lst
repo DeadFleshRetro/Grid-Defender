@@ -1,0 +1,588 @@
+Assembled by Pi2650 for Chris at 06:00 PM, Saturday, 14 October 2023
+
+                 		 	;========================================================================================
+                 		 	; Grid Defender - Work in progress. Gradually building a gridrunner style game using the 
+                 		 	; background grid. 
+                 		 	; 
+                 		 	;
+                 		 	;========================================================================================
+                 		 	
+                 		 	; PROCESSOR CONSTANTS
+                 		 	; -------------------
+                 		 	
+                 		 	carrybit		equ	$01		; bit positions of these flags in PSU & PSL
+                 		 	compare			equ	$02
+                 		 	withcarry		equ	$08
+                 		 	registerselect	equ	$10
+                 		 	intinhibit		equ	$20
+                 		 	stackpointer	equ	$07
+                 		 	sense			equ	$80
+                 		 	flag			equ	$40
+                 		 	
+                 		 	sound			equ	%11000100
+                 		 	
+                 		 	; PVI CONSTANTS
+                 		 	; -------------
+                 		 	
+                 		 	effects			equ	$1e80	; location of the 74LS378
+                 		 	
+                 		 	object1			equ	$1f00	; mem locations of object/shape 1
+                 		 	shape1			equ	$1f00	; 
+                 		 	hc1				equ	$1f0a	; hc = Horizontal Coordinate
+                 		 	hcd1			equ	$1f0b	; hcd = Horizontal Coordinate Duplicate
+                 		 	vc1				equ	$1f0c	; vc = Vertical Coordinate
+                 		 	voff1			equ	$1f0d	; voff = Vertical Offset
+                 		 	
+                 		 	object2			equ	$1f10
+                 		 	shape2			equ	$1f10
+                 		 	hc2				equ	$1f1a
+                 		 	hcd2			equ	$1f1b
+                 		 	vc2				equ	$1f1c
+                 		 	voff2			equ	$1f1d
+                 		 	
+                 		 	object3			equ	$1f20
+                 		 	shape3			equ	$1f20
+                 		 	hc3				equ	$1f2a
+                 		 	hcd3			equ	$1f2b
+                 		 	vc3				equ	$1f2c
+                 		 	voff3			equ	$1f2d
+                 		 	
+                 		 	object4			equ	$1f40
+                 		 	shape4			equ	$1f40
+                 		 	hc4				equ	$1f4a
+                 		 	hcd4			equ	$1f4b
+                 		 	vc4				equ	$1f4c
+                 		 	voff4			equ	$1f4d
+                 		 	
+                 		 	objectsize		equ	$1fc0	; location of object size variable
+                 		 	
+                 		 	colours12		equ	$1fc1	; location of object 1 & 2 colours
+                 		 	colours34		equ	$1fc2	; location of object 3 & 4 colours
+                 		 	backgnd			equ	$1fc6	; location of background colour
+                 		 	
+                 		 	pitch			equ	$1fc7
+                 		 	
+                 		 	scoreformat		equ	$1fc3	; location of score format
+                 		 	score12			equ	$1fc8	; locations of score values
+                 		 	score34			equ	$1fc9
+                 		 	
+                 		 	objectstatus	equ	$1fca	; location of object completion flags (and bg collisions)
+                 		 	obj1complete	equ	$08		; bit position of object 1 completion flag
+                 		 	obj2complete	equ	$04		; bit position of object 2 completion flag
+                 		 	
+                 		 	gridstart		equ $1F80	; location of background grid
+                 		 	
+                 		 	joystick1		equ	$1fcc	; location of joystick 1 value
+                 		 	joystick2		equ $1fcd	; location of joystick 2 value
+                 		 	
+                 		 	pausecounter	equ	$1f0e   ; location of the pause counter in scratch memory
+                 		 	backgndcopy		equ	$1f0f	; location of the colour values for cycling 
+                 		 	object1anim		equ	$1f4e	; location of the animation frame pointer for object 1
+                 		 	gridoffset		equ	$1f1e	; location of the grid offset value in scratch 
+                 		 	gridmask		equ $1f1f	; location of the grid mask in scratch
+                 		 	
+                 		 	;=============================================================================
+                 		 	; PROGRAM CONSTANTS
+                 		 	; -----------------
+                 		 	
+                 		 	; It's a good idea to define values like this only once, rather than at every 
+                 		 	; instance where they are used. Then, if the value has to be changed, it only
+                 		 	; has to be found and changed once.
+                 		 	
+                 		 	stdpause		equ	2
+                 		 	movepitch		equ	$10
+                 		 	leftlimit		equ 29
+                 		 	rightlimit		equ 149
+                 		 	toplimit		equ	30
+                 		 	bottomlimit		equ 186
+                 		 	obj1animframes	equ 40
+                 		 	
+                 		 	;=============================================================================
+                 		 	; PROGRAM START
+                 		 	; -----------------
+                 		 	
+                 		 		org	0
+                 		 	reset_vector:				; the microprocessor starts here when the reset button is pressed
+0000 1F 00 04 		3		bcta,un	reset			; gosub > reset
+                 		 	interrupt_vector:			; interrupts shouldn't happen, but we set this just in case
+0003 17         		3		retc,un					; return without doing anything
+                 		 	reset:	
+                 		 								; initialise program status word, just to be sure!
+0004 76 20     		3		ppsu	intinhibit		; inhibit interrupts
+0006 74 07     		3		cpsu	stackpointer	; stack pointer=%000
+0008 75 10     		3		cpsl	registerselect	; register bank 0
+000A 75 08     		3		cpsl	withcarry 		; without carry
+000C 75 02     		3		cpsl	compare			; arithmetic compare
+                 		 	
+000E 20         		2		eorz	r0				; clear register 0
+000F CC 1E 80 		4		stra,r0	effects			; initialise the 74LS378
+0012 3F 01 3A 		3		bsta,un	InitPVI			; gosub > Initialise the video chip
+0015 3F 01 70 		3		bsta,un	Define_objects	; gosub > Define the initial shape and location of all objects
+0018 3F 01 9C 		3	    bsta,un Set_grid        ; gosub > Set the initial grid
+                 		 	
+001B 20         		2		eorz	r0				; set the grid offset to 0
+001C CC 1F 1E 		4		stra,r0 gridoffset		; write the grid offset (the grid byte that object 1 corresponds to)
+001F 04 80     		2		lodi,r0	%10000000		; set the grid mask to bit 7 (starting position of object 1)
+0021 CC 1F 1F 		4	    stra,r0 gridmask		; write the grid mask
+                 		 	
+0024 04 C4     		2		lodi,r0	sound			; enable PVI sounds
+0026 CC 1E 80 		4		stra,r0	effects			;
+                 		 	
+0029 04 28     		2		lodi,r0	obj1animframes	; Initialise object 1 animations
+002B CC 1F 4E 		4		stra,r0	object1anim
+                 		 	
+                 		 	endless:
+                 		 	
+002E 3F 00 52 		3		bsta,un	Obj1_anim_frame	; gosub > Select the next animation frame for object 1
+0031 3F 01 B1 		3		bsta,un	Wait_vert_reset	; gosub > wait for vertical reset
+0034 3F 00 4D 		3		bsta,un	Stop_sounds		; gosub > stop all sounds
+0037 3F 00 77 		3		bsta,un	Joystick_1V		; gosub > check the vertical pot of joystick 1
+003A 3F 01 B1 		3		bsta,un	Wait_vert_reset	; gosub > wait for vertical reset
+003D 3F 00 4D 		3		bsta,un	Stop_sounds		; gosub > stop all sounds
+0040 3F 00 CE 		3		bsta,un	Joystick_1H		; gosub > check the horizontal pot of joystick 1
+0043 3F 00 69 		3		bsta,un	Cycle_grid		; gosub > cycle the grid colour
+0046 04 02     		2		lodi,r0	stdpause
+0048 3F 01 5A 		3		bsta,un	Pause			; gosub > pause
+004B 1B 61     		3		bctr,un	endless			; return to the beginning of the endless loop
+                 		 	
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Stop all sounds
+                 		 	
+                 		 	Stop_sounds:
+004D 20         		2		eorz	r0				; stop any sounds by
+004E CC 1F C7 		4		stra,r0	pitch			; setting pitch to zero
+0051 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Select the next animation frame for Object 1
+                 		 	
+                 		 	Obj1_anim_frame:
+0052 0F 1F 4E 		4		loda,r3	object1anim		; cycle through animation frame pointer values: 40,30,20,10 & repeat
+0055 A7 0A     		2		subi,r3 10
+0057 5B 02     		3		brnr,r3	O1AF_01			; skip the pointer value reset if not yet zero
+0059 07 28     		2		lodi,r3 obj1animframes	; reset the counter 
+                 		 	
+                 		 	O1AF_01
+005B CF 1F 4E 		4		stra,r3	object1anim		; save the current pointer value back to object1anim
+005E 05 0A     		2		lodi,r1 10				; start a new counter to load the shape data 
+                 		 	loop_O1AF_01:
+0060 0F 42 04 		4		loda,r0	obj1frames,r3-	; grab the appropriate line of shape data
+0063 CD 5F 00 		4		stra,r0	object1,r1-		; store it to the corresponding byte of object 1
+0066 59 78     		3		brnr,r1 loop_O1AF_01	; loop back if we're not at zero yet
+0068 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Cycle through the grid colours
+                 		 	
+                 		 	Cycle_grid:
+0069 0C 1F 0F 		4		loda,r0	backgndcopy		; load the background into r0
+006C 84 10     		2		addi,r0	$10				; cycle through bits 4-6
+006E 44 7F     		2		andi,r0	$7F				; clear bit 7 when it overflows
+0070 CC 1F C6 		4		stra,r0	backgnd			; store r0 back to the background 
+0073 CC 1F 0F 		4		stra,r0	backgndcopy		; & the background copy
+0076 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Check vertical pot on Joystick 1
+                 		 	
+                 		 	Joystick_1V
+0077 3F 01 AC 		3		bsta,un	Vsync1			; gosub > Vsync1 (wait for the vertical reset to begin)
+007A 74 40     		3		cpsu	flag			; clear flag to 1 (read vertical pots)
+007C 0C 1F CC 		4		loda,r0	joystick1		; load the value of joystick1 into register 0
+007F E4 20     		2		comi,r0	$20				; compare the controller value with 32
+0081 1A 05     		3		bctr,lt	joystick_up		; if it's less than 32, then go to joystick_up
+0083 E4 B8     		2		comi,r0	$B8				; compare it to 184 (everything in between we're calling dead-spot)
+0085 19 24     		3		bctr,gt	joystick_down	; if it's more than 184, then go to joystick_down
+0087 17         		3		retc,un					; return from subroutine
+                 		 		
+                 		 	joystick_up:
+0088 0F 1F 0C 		4		loda,r3	vc1				; load the current vertical coordinate into r3
+008B E7 1E     		2		comi,r3	toplimit		; are we in the top row? I.e. against the top edge limit
+008D 16         		3		retc,lt					; if we are, then just return
+008E 0E 1F 1E 		4		loda,r2	gridoffset		; we're not, so load the gridoffset into r2
+0091 A6 04     		2		subi,r2	4				; take 4 off it to reflect the byte of grid definition we're moving to
+0093 0D 1F 1F 		4		loda,r1	gridmask		; load the current grid mask into r1
+0096 3F 01 35 		3		bsta,un	Can_I_move		; gosub > Can I move, i.e. check if there's a dot to move to?
+0099 58 01     		3		brnr,r0	move_up			; if there is a dot, move the object up
+009B 17         		3		retc,un					; return from subroutine
+                 		 		
+                 		 	move_up:
+009C 3F 01 2F 		3		bsta,un	Play_move_sound	; gosub > Play the movement sound
+009F A7 14     		2		subi,r3	20				; subtract 20 from the vertical coordinate
+00A1 CF 1F 0C 		4		stra,r3	vc1				; write back all three values
+00A4 CE 1F 1E 		4		stra,r2	gridoffset		;
+00A7 CD 1F 1F 		4		stra,r1	gridmask		;
+00AA 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	joystick_down:
+00AB 0F 1F 0C 		4		loda,r3	vc1				; load the current vertical coordinate into r3
+00AE E7 BA     		2		comi,r3 bottomlimit		; are we in the bottom row? I.e. against the bottom edge limit
+00B0 15         		3		retc,gt					; if we are, then just return
+00B1 0E 1F 1E 		4		loda,r2	gridoffset		; we're not, so load the gridoffset into r2
+00B4 86 04     		2		addi,r2	4				; add 4 to it to reflect the byte of grid definition we're moving to
+00B6 0D 1F 1F 		4		loda,r1	gridmask		; load the current gridmask into r1
+00B9 3F 01 35 		3		bsta,un	Can_I_move		; gosub > Can I move, i.e. check if there's a dot to move to?
+00BC 58 01     		3		brnr,r0	move_down		; if there is a dot, move the object down
+00BE 17         		3		retc,un
+                 		 	
+                 		 	move_down:
+00BF 3F 01 2F 		3		bsta,un	Play_move_sound	; gosub > Play the movement sound
+00C2 87 14     		2		addi,r3 20				; add 20 to the vertical coordinate
+00C4 CF 1F 0C 		4		stra,r3	vc1				; write back all three values
+00C7 CE 1F 1E 		4		stra,r2	gridoffset		;
+00CA CD 1F 1F 		4		stra,r1	gridmask		;
+00CD 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Check horizontal pot on Joystick 1
+                 		 	
+                 		 	Joystick_1H
+00CE 3F 01 AC 		3		bsta,un Vsync1			; gosub > Vsync1 (wait for the vertical reset to begin)
+00D1 76 40     		3		ppsu	flag			; set flag (read horizontal pots)
+00D3 0C 1F CC 		4		loda,r0	joystick1		; load the value of joystick 1 into register 3
+00D6 E4 20     		2		comi,r0	$20				; compare the controller value with 32
+00D8 1A 05     		3		bctr,lt	joystick_left	; if it's less than 32, then go to joystick_left
+00DA E4 B8     		2		comi,r0 $B8				; compare it to 184 (everything in between we're calling dead-spot)
+00DC 19 29     		3		bctr,gt joystick_right	; if it's more than 184, then go to joystick_right
+00DE 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	joystick_left:
+00DF 0F 1F 0A 		4		loda,r3	hc1				; load the current horizontal coordinate into r3
+00E2 E7 1D     		2		comi,r3 leftlimit		; are we in the leftmost column? I.e. against the left edge limit
+00E4 16         		3		retc,lt					; if we are then just return
+00E5 0E 1F 1E 		4		loda,r2	gridoffset		; we're not, so load the current gridoffset into r2
+00E8 0D 1F 1F 		4		loda,r1	gridmask		; load the current grid mask into r1
+00EB D1         		2		rrl,r1					; bit rotate the gridmask in r1 to the left
+00EC E5 01     		2		comi,r1	$01				; check to see if it's rotated right round
+00EE 98 02     		3		bcfr,eq	joystick_left02	; ; skip the next line if it hasn't
+00F0 A6 01     		2		subi,r2	1				; decrement the grid offset (moving from right side to left side of grid)
+                 		 	
+                 		 	joystick_left02:
+00F2 3F 01 35 		3		bsta,un	Can_I_move		; gosub > Can I move, i.e. check if there's a dot to move to?
+00F5 58 01     		3		brnr,r0	move_left		; if there is a dot, move the object left
+00F7 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	move_left:
+00F8 3F 01 2F 		3		bsta,un	Play_move_sound	; gosub > Play the movement sound
+00FB A7 08     		2		subi,r3 8				; subtract 8 from the horizontal coordinate
+00FD CF 1F 0A 		4		stra,r3	hc1				; write back all three values
+0100 CE 1F 1E 		4		stra,r2	gridoffset		;
+0103 CD 1F 1F 		4		stra,r1	gridmask		;
+0106 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	joystick_right:
+0107 0F 1F 0A 		4		loda,r3	hc1				; load the current horizontal coordinate into r3
+010A E7 95     		2		comi,r3 rightlimit		; are we in the rightmost column? I.e. against the right edge limit
+010C 15         		3		retc,gt					; if we are then just return
+010D 0E 1F 1E 		4		loda,r2	gridoffset		; we're not, so load the current gridoffset into r2
+0110 0D 1F 1F 		4		loda,r1	gridmask		; load the current grid mask into r1
+0113 51         		2		rrr,r1					; bit rotate the gridmask in r1 to the right
+0114 E5 80     		2		comi,r1	$80				; check to see if it's rotated right round
+0116 98 02     		3		bcfr,eq	joystick_right02	; skip the next line if it hasn't
+0118 86 01     		2		addi,r2	1				; increment the grid offset (moving from left side to right side of grid)
+                 		 	
+                 		 	joystick_right02:
+011A 3F 01 35 		3		bsta,un	Can_I_move		; gosub > Can I move, i.e. check if there's a dot to move to?
+011D 58 01     		3		brnr,r0	move_right		; if there is a dot, move the object right
+011F 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	move_right:
+0120 3F 01 2F 		3		bsta,un	Play_move_sound	; gosub > Play the movement sound
+0123 87 08     		2		addi,r3 8				; add 8 to the horizontal coordinate
+0125 CF 1F 0A 		4		stra,r3	hc1				; write back all three values
+0128 CE 1F 1E 		4		stra,r2	gridoffset		;
+012B CD 1F 1F 		4		stra,r1	gridmask		;
+012E 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Play the movement sound
+                 		 	
+                 		 	Play_move_sound:
+012F 04 10     		2		lodi,r0	movepitch		; play movement tone
+0131 CC 1F C7 		4		stra,r0	pitch			;
+0134 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - Check if there's a dot to move to
+                 		 	; (r0 will be non zero if there is a dot to move to)
+                 		 	
+                 		 	Can_I_move:
+0135 0E 7F 80 		4		loda,r0	gridstart,r2	; load the contents of gridstart+gridoffset into r0
+0138 41         		2		andz	r1				; logical ADD r0 with the current gridmask
+0139 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - initialise PVI
+                 		 	
+                 		 	InitPVI:
+013A 20         		2		eorz	r0				; clear register 0
+013B 07 CA     		2		lodi,r3	$CA				; set register 3 to one beyond the last address of writable PVI memory.
+                 		 	loopIP_01:					; loop to set every location between the beginning of PVI mem (object1)
+013D CF 5F 00 		4		stra,r0	object1,r3-		; and the end of writable PVI memory to zero (contents of r0).
+0140 5B 7B     		3		brnr,r3	loopIP_01		;
+                 		 	
+0142 04 02     		2		lodi,r0 	$02			; set the score format to single number at top
+0144 CC 1F C3 		4		stra,r0 	scoreformat	; write the score format
+0147 04 AA     		2		lodi,r0 	$aa        	; set the first 2 score digits to larger than 9 (do not display)
+0149 CC 1F C8 		4		stra,r0 	score12		; write the first 2 score digits
+014C 04 AA     		2		lodi,r0 	$aa			; set the second 2 score digits to larger than 9 (do not display)
+014E CC 1F C9 		4		stra,r0 	score34		; write the second 2 score digits
+                 		 	
+0151 04 69     		2		lodi,r0 	%01101001	; set the screen colour to blue, background enabled, grid to yellow 01101001
+0153 CC 1F C6 		4		stra,r0 	backgnd		; write the screen colour
+0156 CC 1F 0F 		4		stra,r0		backgndcopy	; take a copy of it
+0159 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine - pause the number of cycles in r0
+                 		 	
+                 		 	Pause:
+015A CC 1F 0E 		4		stra,r0	pausecounter
+                 		 	loopP_01:
+015D 3F 01 B1 		3		bsta,un	Wait_vert_reset	; goto subroutine "wait for vertical reset"
+0160 0C 1F CA 		4		loda,r0	objectstatus	; clear VRLE and collision bits.
+0163 0C 1F 0E 		4		loda,r0	pausecounter 	; load pause value into r1
+0166 98 01     		3		bcfr,eq	branchP_01		; if it's not zero, then branch to decrement pause
+0168 17         		3		retc,un					; return from sub routine
+                 		 	
+                 		 	branchP_01:
+0169 A4 01     		2		subi,r0	1				; decrement r1
+016B CC 1F 0E 		4		stra,r0	pausecounter	; load r1 back into pause
+016E 1B 6D     		3		bctr,un	loopP_01		; go back to top and wait for next frame
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine  -  define shapes, positions, colours & sizes of all objects
+                 		 	
+                 		 	Define_objects
+                 		 	; Load Objects into PVI
+0170 07 0E     		2		lodi,r3	14              ; set the decrement counter to 14 (bytes per object)
+                 		 	loopDS_01:
+0172 0F 41 CC 		4		loda,r0	one,r3-         ; load each byte from the Data statements, including positions, etc.
+0175 CF 7F 00 		4		stra,r0	object1,r3
+0178 0F 61 DA 		4		loda,r0	two,r3
+017B CF 7F 10 		4		stra,r0	object2,r3
+017E 0F 61 E8 		4		loda,r0	three,r3
+0181 CF 7F 20 		4		stra,r0	object3,r3
+0184 0F 61 F6 		4		loda,r0	four,r3
+0187 CF 7F 40 		4		stra,r0	object4,r3
+018A 5B 66     		3		brnr,r3	loopDS_01
+                 		 	
+                 		 	; Set initial object colour and size data
+018C 04 21     		2		lodi,r0	%00100001
+018E CC 1F C1 		4		stra,r0	colours12
+0191 04 10     		2		lodi,r0	%00010000
+0193 CC 1F C2 		4		stra,r0	colours34
+0196 04 00     		2		lodi,r0	%00000000
+0198 CC 1F C0 		4		stra,r0	objectsize
+019B 17         		3		retc,un					; return from sub routine
+                 		 	
+                 		 	;===================================================================
+                 		 	; subroutine  -  set the initial grid configuration
+                 		 	
+                 		 	Set_grid:
+019C 07 2D     		2		lodi,r3	45              ; set the decrement counter to 45 (to cover all of grid memory)
+                 		 	loopDS_02:
+019E 0F 42 2C 		4		loda,r0	grid,r3-        ; load the grid data into memory locations from gridstart onwards
+01A1 CF 7F 80 		4		stra,r0	gridstart,r3
+01A4 5B 78     		3		brnr,r3	loopDS_02
+01A6 17         		3	    retc,un                 ; return from subroutine
+                 		 	
+                 		 	;=================================================================
+                 		 	; subroutine - wait for vertical reset to clear
+                 		 	Vsync0:
+                 		 	loopVS0_01:
+01A7 B4 80     		3		tpsu	sense			; test the Sense bit in PSU (set condition codes to %10 when Sense = 0)
+01A9 18 7C     		3		bctr,a1	loopVS0_01		; loop until Sense bit is clear (a1 = all 1s)
+01AB 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;=================================================================
+                 		 	; subroutine - wait for vertical reset to set
+                 		 	Vsync1:
+                 		 	loopVS1_01:
+01AC B4 80     		3		tpsu	sense			; test the Sense bit in PSU (set condition codes to %00 when Sense = 1)
+01AE 1A 7C     		3		bctr,s0	loopVS1_01		; loop until Sense bit is set (s0 = some 0s)
+01B0 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	
+                 		 	;============================================================
+                 		 	; subroutine - wait for start of vertical reset period
+                 		 	Wait_vert_reset:
+01B1 75 02     		3		cpsl	compare			; set COM bit to arithmetic compare   
+                 		 								; (the Sense input, VRST, is read on bit 7 of PSU, which is also the sign bit
+                 		 								; so we can use arithmetic compare to test this bit)
+                 		 	
+                 		 	loopWVR_01:					; wait here while Sense line is HIGH (in case we arrive here in the middle of a vertical reset)
+01B3 12         		2		spsu					; get PSU
+01B4 1A 7D     		3		bctr,lt	loopWVR_01		; loop if it's negative (Sense bit is positive)
+                 		 	
+                 		 	loopWVR_02					; wait here while Sense line is LOW (now just waiting for VRST to go HIGH)
+01B6 12         		2		spsu					; get PSU
+01B7 9A 7D     		3		bcfr,lt loopWVR_02		; loop if it's positive
+                 		 	
+01B9 77 02     		3		ppsl	compare			; set COM back to logical compare
+01BB 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;=============================================================
+                 		 	;subroutine - wait for object 1 to finish
+                 		 	
+                 		 	Wait_obj1_complete
+01BC 0F 1F CA 		4		loda,r3	objectstatus	; load the current object status into register 3
+01BF F7 08     		3		tmi,r3	$08				; test bit 3 - object 1 completion
+01C1 9C 01 BC 		3		bcfa,eq	Wait_obj1_complete	; wait if object 1 has not completed (if != then loop back)
+01C4 17         		3		retc,un					; return from subroutine
+                 		 		
+                 		 	;=============================================================
+                 		 	;subroutine - wait for object to finish
+                 		 	;  enter with r1=mask for bit to be tested:
+                 		 	;	obj1=$08, obj2=$04, obj3=$02, obj4=$01
+                 		 	
+                 		 	Wait_obj:
+01C5 0C 1F CA 		4		loda,r0 objectstatus	; load the current object status into register 0
+01C8 41         		2		andz	r1				; AND the r0 against the input mask in r1
+01C9 18 7A     		3		bctr,eq	Wait_obj		; While the condition codes are showing true, loop back
+01CB 17         		3		retc,un					; return from subroutine
+                 		 	
+                 		 	;=============================================================
+                 		 	; All Object and Grid Data
+                 		 	
+                 		 	; Object Data
+                 		 	one:
+01CC 10         		 		db	%00010000
+01CD 38         		 		db	%00111000
+01CE 6C         		 		db 	%01101100
+01CF C6         		 		db	%11000110
+01D0 82         		 		db	%10000010
+01D1 82         		 		db	%10000010
+01D2 C6         		 		db	%11000110
+01D3 6C         		 		db	%01101100
+01D4 38         		 		db	%00111000
+01D5 10         		 		db	%00010000
+01D6 1C         		 		db	28		;hc
+01D7 1C         		 		db	28		;hcb
+01D8 0F         		 		db	15		;vc
+01D9 FE         		 		db	254		;voff
+                 		 	
+                 		 	two:
+01DA 10         		 		db	%00010000
+01DB 38         		 		db	%00111000
+01DC 6C         		 		db 	%01101100
+01DD C6         		 		db	%11000110
+01DE 82         		 		db	%10000010
+01DF 82         		 		db	%10000010
+01E0 C6         		 		db	%11000110
+01E1 6C         		 		db	%01101100
+01E2 38         		 		db	%00111000
+01E3 10         		 		db	%00010000
+01E4 24         		 		db	$24		;hc
+01E5 1E         		 		db	30		;hcb
+01E6 23         		 		db	$23		;vc
+01E7 FE         		 		db	254		;voff
+                 		 	three:
+01E8 10         		 		db	%00010000
+01E9 38         		 		db	%00111000
+01EA 6C         		 		db 	%01101100
+01EB C6         		 		db	%11000110
+01EC 82         		 		db	%10000010
+01ED 82         		 		db	%10000010
+01EE C6         		 		db	%11000110
+01EF 6C         		 		db	%01101100
+01F0 38         		 		db	%00111000
+01F1 10         		 		db	%00010000
+01F2 2C         		 		db	$2C		;hc
+01F3 1E         		 		db	30		;hcb
+01F4 23         		 		db	$23		;vc
+01F5 FE         		 		db	254		;voff
+                 		 	four:
+01F6 10         		 		db	%00010000
+01F7 38         		 		db	%00111000
+01F8 6C         		 		db 	%01101100
+01F9 C6         		 		db	%11000110
+01FA 82         		 		db	%10000010
+01FB 82         		 		db	%10000010
+01FC C6         		 		db	%11000110
+01FD 6C         		 		db	%01101100
+01FE 38         		 		db	%00111000
+01FF 10         		 		db	%00010000
+0200 34         		 		db	$34		;hc
+0201 1E         		 		db	30		;hcb
+0202 23         		 		db	$23		;vc
+0203 FE         		 		db	254		;voff
+                 		 	
+                 		 	; Animation frames
+                 		 	obj1frames:
+0204 00         		 		db	%00000000
+0205 28         		 		db	%00101000
+0206 6C         		 		db 	%01101100
+0207 C6         		 		db	%11000110
+0208 82         		 		db	%10000010
+0209 82         		 		db	%10000010
+020A C6         		 		db	%11000110
+020B 6C         		 		db	%01101100
+020C 28         		 		db	%00101000
+020D 00         		 		db	%00000000
+                 		 	
+020E 10         		 		db	%00010000
+020F 30         		 		db	%00110000
+0210 60         		 		db 	%01100000
+0211 C6         		 		db	%11000110
+0212 82         		 		db	%10000010
+0213 82         		 		db	%10000010
+0214 C6         		 		db	%11000110
+0215 0C         		 		db	%00001100
+0216 18         		 		db	%00011000
+0217 10         		 		db	%00010000
+                 		 	
+0218 10         		 		db	%00010000
+0219 38         		 		db	%00111000
+021A 6C         		 		db 	%01101100
+021B C6         		 		db	%11000110
+021C 00         		 		db	%00000000
+021D 00         		 		db	%00000000
+021E C6         		 		db	%11000110
+021F 6C         		 		db	%01101100
+0220 38         		 		db	%00111000
+0221 10         		 		db	%00010000
+                 		 	
+0222 10         		 		db	%00010000
+0223 18         		 		db	%00011000
+0224 0C         		 		db 	%00001100
+0225 C6         		 		db	%11000110
+0226 82         		 		db	%10000010
+0227 82         		 		db	%10000010
+0228 C6         		 		db	%11000110
+0229 60         		 		db	%01100000
+022A 30         		 		db	%00110000
+022B 10         		 		db	%00010000
+                 		 	
+                 		 	
+                 		 	; Grid Data
+                 		 	grid:
+022C F7 FF     		 		dw	%1111011111111111
+022E 00 00     		 		dw	%0000000000000000
+0230 FF 8F     		 		dw	%1111111110001111
+0232 00 00     		 		dw	%0000000000000000
+0234 FF EF     		 		dw	%1111111111101111
+0236 00 00     		 		dw	%0000000000000000
+0238 FF EF     		 		dw	%1111111111101111
+023A 00 00     		 		dw	%0000000000000000
+023C E7 CF     		 		dw	%1110011111001111
+023E 00 00     		 		dw	%0000000000000000
+0240 FF CF     		 		dw	%1111111111001111
+0242 00 00     		 		dw	%0000000000000000
+0244 7F FF     		 		dw	%0111111111111111
+0246 00 00     		 		dw	%0000000000000000
+0248 EF ED     		 		dw	%1110111111101101
+024A 00 00     		 		dw	%0000000000000000
+024C EF DF     		 		dw	%1110111111011111
+024E 00 00     		 		dw	%0000000000000000
+0250 FB F9     		 		dw	%1111101111111001
+0252 00 00     		 		dw	%0000000000000000
+0254 00         		 		db	%00000000
+0255 00         		 		db	%00000000
+0256 00         		 		db	%00000000
+0257 00         		 		db	%00000000
+0258 00         		 		db	%00000000
